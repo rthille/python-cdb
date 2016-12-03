@@ -1,9 +1,9 @@
 #! /usr/bin/env python
 
 SRCDIR   = "src"
-SRCFILES = map(lambda f: SRCDIR + '/' + f + '.c',
+SRCFILES = list(map(lambda f: SRCDIR + '/' + f + '.c',
               ["cdbmodule","cdb","cdb_make","cdb_hash",
-               "uint32_pack","uint32_unpack"])
+               "uint32_pack","uint32_unpack"]))
 
 from distutils.core import setup, Extension
 
@@ -31,4 +31,3 @@ objects.''',
                       ],
         url = "https://github.com/acg/python-cdb",
       )
-

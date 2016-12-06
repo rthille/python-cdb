@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include <fcntl.h>
 #include "cdb.h"
 #include "cdb_make.h"
+#include "py3.h"
 
 #define open_read(x)       (open((x),O_RDONLY|O_NDELAY))
 /* ala djb's open_foo */
@@ -62,7 +63,7 @@ A CDB object 'cdb_o' offers the following interesting attributes:\n\
   __length__:\n\
     len(cdb_o) returns the total number of items in a cdb,\n\
     which may or may not exceed the number of distinct keys.\n";
-  
+
 
 typedef struct {
     PyObject_HEAD
@@ -90,15 +91,29 @@ cdb_pyread(CdbObject *cdb_o, unsigned int len, uint32 pos) {
   if (c->map) {
     if ((pos > c->size) || (c->size - pos < len))
       goto FORMAT;
+#if PY_MAJOR_VERSION >= 3
+    s = PyUnicode_FromStringAndSize(c->map + pos, len);
+#else
     s = PyString_FromStringAndSize(c->map + pos, len);
+#endif
   } else {
+      goto FORMAT;
+#if PY_MAJOR_VERSION >= 3
+    s = PyUnicode_FromStringAndSize(NULL, len);
+#else
     s = PyString_FromStringAndSize(NULL, len);
+#endif
     if (s == NULL)
       return NULL;
     if (lseek(c->fd,pos,SEEK_SET) == -1) goto ERRNO;
     while (len > 0) {
       int r;
+      goto FORMAT;
+#if PY_MAJOR_VERSION >= 3
+      char * buf = PyUnicode_AsUTF8(s);
+#else
       char * buf = PyString_AsString(s);
+#endif
 
       do {
         Py_BEGIN_ALLOW_THREADS
@@ -190,7 +205,11 @@ cdbo_get(CdbObject *self, PyObject *args) {
 
   /* prep. possibly ensuing call to getnext() */
   Py_XDECREF(self->getkey);
+#if PY_MAJOR_VERSION >= 3
+  self->getkey = PyUnicode_FromStringAndSize(key, klen);
+#else
   self->getkey = PyString_FromStringAndSize(key, klen);
+#endif
   if (self->getkey == NULL)
     return NULL;
 
@@ -263,14 +282,19 @@ cdbo_getnext(CdbObject *self, PyObject *args) {
     return NULL;
 
   if (self->getkey == NULL) {
-    PyErr_SetString(PyExc_TypeError, 
+    PyErr_SetString(PyExc_TypeError,
                     "getnext() called without first calling get()");
     return NULL;
   }
 
-  switch(cdb_findnext(&self->c, 
-                      PyString_AsString(self->getkey), 
+  switch(cdb_findnext(&self->c,
+#if PY_MAJOR_VERSION >= 3
+                      PyUnicode_AsUTF8(self->getkey),
+                      PyUnicode_GET_SIZE(self->getkey))) {
+#else
+                      PyString_AsString(self->getkey),
                       PyString_Size(self->getkey))) {
+#endif
     case -1:
       return CDBerr;
     case  0:
@@ -330,15 +354,23 @@ _cdbo_keyiter(CdbObject *self) {
     if (key == NULL)
       return NULL;
 
+#if PY_MAJOR_VERSION >= 3
+    switch(cdb_find(&self->c,PyUnicode_AsUTF8(key),PyUnicode_GET_SIZE(key))) {
+#else
     switch(cdb_find(&self->c,PyString_AsString(key),PyString_Size(key))) {
+#endif
       case -1:
         Py_DECREF(key);
         key = NULL;
         return CDBerr;
       case 0:
         /* bizarre, impossible? PyExc_RuntimeError? */
-        PyErr_SetString(PyExc_KeyError, 
+        PyErr_SetString(PyExc_KeyError,
+#if PY_MAJOR_VERSION >= 3
+                        PyUnicode_AsUTF8(key));
+#else
                         PyString_AS_STRING((PyStringObject *) key));
+#endif
         Py_DECREF(key);
         key = NULL;
       default:
@@ -541,8 +573,12 @@ cdbo_subscript(CdbObject *self, PyObject *k) {
     case -1:
       return CDBerr;
     case 0:
-      PyErr_SetString(PyExc_KeyError, 
+      PyErr_SetString(PyExc_KeyError,
+#if PY_MAJOR_VERSION >= 3
+                      PyUnicode_AsUTF8(k));
+#else
                       PyString_AS_STRING((PyStringObject *) k));
+#endif
       return NULL;
     default:
       return CDBO_CURDATA(self);
@@ -556,7 +592,7 @@ static PyMappingMethods cdbo_as_mapping = {
 	(objobjargproc)0
 };
 
-static PyMethodDef cdb_methods[] = { 
+static PyMethodDef cdb_methods[] = {
 
   {"get",      (PyCFunction)cdbo_get,      METH_VARARGS,
                cdbo_get_doc },
@@ -564,7 +600,7 @@ static PyMethodDef cdb_methods[] = {
                cdbo_getnext_doc },
   {"getall",   (PyCFunction)cdbo_getall,   METH_VARARGS,
                cdbo_getall_doc },
-  {"has_key",  (PyCFunction)cdbo_has_key,  METH_VARARGS, 
+  {"has_key",  (PyCFunction)cdbo_has_key,  METH_VARARGS,
                cdbo_has_key_doc },
   {"keys",     (PyCFunction)cdbo_keys,     METH_VARARGS,
                cdbo_keys_doc },
@@ -675,18 +711,18 @@ cdbo_getattr(CdbObject *self, char *name) {
 
   if (!strcmp(name,"fd")) {
     return Py_BuildValue("i", self->c.fd);  /* cdb_o.fd */
-  } 
+  }
 
   if (!strcmp(name,"name")) {
     Py_INCREF(self->name_py);
     return self->name_py;                   /* cdb_o.name */
-  } 
+  }
 
   if (!strcmp(name,"size")) {               /* cdb_o.size */
     return self->c.map ?  /** mmap()d ? stat.st_size : None **/
            Py_BuildValue("l", (long) self->c.size) :
            Py_BuildValue("");
-  } 
+  }
 
   PyErr_SetString(PyExc_AttributeError, name);
   return NULL;
@@ -784,7 +820,7 @@ CdbMake_addmany(cdbmakeobject *self, PyObject *args) {
 
     if (PyString_AsStringAndSize(data_item, &dat, &dlen) < 0)
       return NULL;
-    
+
     if (cdb_make_add(&self->cm, key, klen, dat, dlen) == -1)
       return CDBMAKEerr;
   }
@@ -1044,7 +1080,7 @@ initcdb() {
   CDBError = PyErr_NewException("cdb.error", NULL, NULL);
   PyDict_SetItemString(d, "error", CDBError);
 
-  PyDict_SetItemString(d, "__version__", 
+  PyDict_SetItemString(d, "__version__",
                        v = PyString_FromString(VERSION));
   PyDict_SetItemString(d, "__cdb_version__",
                        v = PyString_FromString(CDBVERSION));
